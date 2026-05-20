@@ -1,0 +1,105 @@
+version: '3.3'
+
+services:
+  zookeeper:
+    image: 'gcr.io/litmus-public/mc-addons/zookeeper:3.7.0-debian-10-r70'
+    container_name: zookeeper
+    platform: linux/amd64
+    ports:
+      - '2181:2181'
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+
+  kafka:
+    image: 'gcr.io/litmus-public/mc-addons/kafka:2.8.0-debian-10-r55'
+    container_name: kafka
+    platform: linux/amd64
+    ports:
+      - "9093:9093"
+    expose:
+      - "9093"
+    environment:
+      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CLIENT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - KAFKA_CFG_LISTENERS=CLIENT://:9092,EXTERNAL://:9093
+      - KAFKA_CFG_ADVERTISED_LISTENERS=CLIENT://kafka:9092,EXTERNAL://localhost:9093
+      - KAFKA_INTER_BROKER_LISTENER_NAME=CLIENT
+      - ALLOW_PLAINTEXT_LISTENER=yes
+    depends_on:
+      - zookeeper
+    healthcheck:
+      test: [ "CMD", "kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list" ]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+
+  kafka-init:
+    image: 'gcr.io/litmus-public/mc-addons/kafka:2.8.0-debian-10-r55'
+    container_name: kafka-init
+    platform: linux/amd64
+    depends_on:
+      kafka:
+        condition: service_healthy
+    command: ["/create_topic.sh"]
+    volumes:
+      - ./create_topic.sh:/create_topic.sh
+    restart: "no"
+
+  app:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    container_name: app
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    ports:
+      - "8000:8000"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+
+  consumer1:
+    build:
+      context: .
+      dockerfile: consumer/Dockerfile.consumer1
+    container_name: consumer1
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_CONSUMER_GROUP=race-events-group
+
+  consumer2:
+    build:
+      context: .
+      dockerfile: consumer/Dockerfile.consumer2
+    container_name: consumer2
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_CONSUMER_GROUP=race-events-group
+
+  kafdrop:
+    image: obsidiandynamics/kafdrop:3.31.0
+    container_name: kafdrop
+    platform: linux/amd64
+    ports:
+     - "9000:9000"
+    environment:
+      KAFKA_BROKERCONNECT: "kafka:9092"
+      JVM_OPTS: "-Xms16M -Xmx48M -Xss180K -XX:-TieredCompilation -XX:+UseStringDeduplication -noverify"
+    depends_on:
+      - kafka
