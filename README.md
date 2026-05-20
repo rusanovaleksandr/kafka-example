@@ -14,6 +14,7 @@
 
 ### 1. Поднять стек
 ```bash
+chmod +x create_topic.sh
 docker compose up -d --build
 ```
 
